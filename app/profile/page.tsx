@@ -265,12 +265,7 @@ export default function ProfilePage() {
           Baba<span className="text-green-600">Concept</span>
         </Link>
 
-        <button
-          onClick={logout}
-          className="rounded-xl bg-red-50 px-3 py-2 text-sm font-bold text-red-600"
-        >
-          Sair
-        </button>
+       
       </header>
 
       <section className="px-5 py-6">
