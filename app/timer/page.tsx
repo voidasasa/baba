@@ -47,52 +47,11 @@ function digitsToSeconds(digits: string) {
   return minutes * 60 + Math.min(seconds, 59);
 }
 
-function playBeep() {
-  const audioContext = new AudioContext();
-
-  const masterGain = audioContext.createGain();
-  masterGain.gain.value = 1.5;
-  masterGain.connect(audioContext.destination);
-
-  const notes = [
-    { frequency: 900, start: 0, duration: 0.35 },
-    { frequency: 1200, start: 0.4, duration: 0.35 },
-    { frequency: 900, start: 0.8, duration: 0.35 },
-    { frequency: 1200, start: 1.2, duration: 0.35 },
-    { frequency: 900, start: 1.6, duration: 0.45 },
-    { frequency: 1200, start: 2.1, duration: 0.6 },
-  ];
-
-  notes.forEach((note) => {
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-
-    oscillator.type = "square";
-    oscillator.frequency.value = note.frequency;
-
-    oscillator.connect(gainNode);
-    gainNode.connect(masterGain);
-
-    const startTime = audioContext.currentTime + note.start;
-    const endTime = startTime + note.duration;
-
-    gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(1.2, startTime + 0.02);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, endTime);
-
-    oscillator.start(startTime);
-    oscillator.stop(endTime);
-  });
-
-  setTimeout(() => {
-    audioContext.close();
-  }, 3200);
-}
-
 export default function TimerPage() {
   const router = useRouter();
 
   const wakeLockRef = useRef<WakeLockSentinelType | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const [checkingUser, setCheckingUser] = useState(true);
 
@@ -112,6 +71,96 @@ export default function TimerPage() {
 
     return Math.max(0, Math.min(100, (remainingSeconds / initialSeconds) * 100));
   }, [remainingSeconds, initialSeconds]);
+
+  async function unlockAudio() {
+    try {
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+
+      if (!AudioContextClass) return;
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContextClass();
+      }
+
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+
+      const audioContext = audioContextRef.current;
+
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      gainNode.gain.value = 0.0001;
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.03);
+    } catch (error) {
+      console.log("Não foi possível preparar o áudio:", error);
+    }
+  }
+
+  async function playBeep() {
+    try {
+      if (!audioContextRef.current) {
+        await unlockAudio();
+      }
+
+      const audioContext = audioContextRef.current;
+
+      if (!audioContext) return;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      const masterGain = audioContext.createGain();
+      masterGain.gain.value = 1.8;
+      masterGain.connect(audioContext.destination);
+
+      const notes = [
+        { frequency: 900, start: 0, duration: 0.35 },
+        { frequency: 1200, start: 0.4, duration: 0.35 },
+        { frequency: 900, start: 0.8, duration: 0.35 },
+        { frequency: 1200, start: 1.2, duration: 0.35 },
+        { frequency: 900, start: 1.6, duration: 0.45 },
+        { frequency: 1200, start: 2.1, duration: 0.7 },
+      ];
+
+      notes.forEach((note) => {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.type = "square";
+        oscillator.frequency.value = note.frequency;
+
+        oscillator.connect(gainNode);
+        gainNode.connect(masterGain);
+
+        const startTime = audioContext.currentTime + 0.05 + note.start;
+        const endTime = startTime + note.duration;
+
+        gainNode.gain.setValueAtTime(0, startTime);
+        gainNode.gain.linearRampToValueAtTime(1.3, startTime + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, endTime);
+
+        oscillator.start(startTime);
+        oscillator.stop(endTime);
+      });
+
+      setTimeout(() => {
+        masterGain.disconnect();
+      }, 4000);
+    } catch (error) {
+      console.log("Erro ao tocar o som:", error);
+    }
+  }
 
   async function requestWakeLock() {
     try {
@@ -178,6 +227,7 @@ export default function TimerPage() {
       setInitialSeconds(seconds);
     }
 
+    await unlockAudio();
     await requestWakeLock();
 
     setHasStarted(true);
@@ -209,16 +259,6 @@ export default function TimerPage() {
     const interval = setInterval(() => {
       setRemainingSeconds((currentSeconds) => {
         if (currentSeconds <= 1) {
-          clearInterval(interval);
-
-          setIsRunning(false);
-          setHasStarted(false);
-          setTimeDigits("0000");
-          setInitialSeconds(0);
-
-          releaseWakeLock();
-          playBeep();
-
           return 0;
         }
 
@@ -228,6 +268,18 @@ export default function TimerPage() {
 
     return () => clearInterval(interval);
   }, [isRunning]);
+
+  useEffect(() => {
+    if (!hasStarted || !isRunning || remainingSeconds > 0) return;
+
+    setIsRunning(false);
+    setHasStarted(false);
+    setTimeDigits("0000");
+    setInitialSeconds(0);
+
+    void releaseWakeLock();
+    void playBeep();
+  }, [remainingSeconds, hasStarted, isRunning]);
 
   useEffect(() => {
     async function handleVisibilityChange() {
@@ -245,7 +297,11 @@ export default function TimerPage() {
 
   useEffect(() => {
     return () => {
-      releaseWakeLock();
+      void releaseWakeLock();
+
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+      }
     };
   }, []);
 
