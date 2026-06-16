@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { House } from "lucide-react";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -42,8 +43,8 @@ export default function SignupPage() {
   async function handleSignup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!name.trim() || !email.trim() || !password.trim()) {
-      alert("Preencha nome, email e senha.");
+    if (!name.trim() || !email.trim() || !password.trim() || !region.trim() || !house.trim()) {
+      alert("Preencha Todos os Campos.");
       return;
     }
 
