@@ -46,27 +46,34 @@ function digitsToSeconds(digits: string) {
 function playBeep() {
   const audioContext = new AudioContext();
 
+  const masterGain = audioContext.createGain();
+  masterGain.gain.value = 30;
+  masterGain.connect(audioContext.destination);
+
   const notes = [
-    { frequency: 660, start: 0, duration: 0.28 },
-    { frequency: 880, start: 0.32, duration: 0.28 },
-    { frequency: 990, start: 0.64, duration: 0.55 },
+    { frequency: 900, start: 0, duration: 0.35 },
+    { frequency: 1200, start: 0.4, duration: 0.35 },
+    { frequency: 900, start: 0.8, duration: 0.35 },
+    { frequency: 1200, start: 1.2, duration: 0.35 },
+    { frequency: 900, start: 1.6, duration: 0.45 },
+    { frequency: 1200, start: 2.1, duration: 0.6 },
   ];
 
   notes.forEach((note) => {
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
 
-    oscillator.type = "sine";
+    oscillator.type = "square";
     oscillator.frequency.value = note.frequency;
 
     oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
+    gainNode.connect(masterGain);
 
     const startTime = audioContext.currentTime + note.start;
     const endTime = startTime + note.duration;
 
     gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(0.45, startTime + 0.03);
+    gainNode.gain.linearRampToValueAtTime(0.9, startTime + 0.02);
     gainNode.gain.exponentialRampToValueAtTime(0.001, endTime);
 
     oscillator.start(startTime);
@@ -75,7 +82,7 @@ function playBeep() {
 
   setTimeout(() => {
     audioContext.close();
-  }, 1600);
+  }, 3200);
 }
 
 export default function TimerPage() {
