@@ -53,6 +53,19 @@ export default function TimerPage() {
   const wakeLockRef = useRef<WakeLockSentinelType | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
+  const alarmOscillatorsRef = useRef<OscillatorNode[]>([]);
+  const alarmMasterGainRef = useRef<GainNode | null>(null);
+  const alarmCleanupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
+  const keepAliveRef = useRef<{
+    oscillator: OscillatorNode;
+    gainNode: GainNode;
+  } | null>(null);
+
+  const deadlineRef = useRef<number | null>(null);
+
   const [checkingUser, setCheckingUser] = useState(true);
 
   const [timeDigits, setTimeDigits] = useState("1500");
@@ -72,94 +85,145 @@ export default function TimerPage() {
     return Math.max(0, Math.min(100, (remainingSeconds / initialSeconds) * 100));
   }, [remainingSeconds, initialSeconds]);
 
-  async function unlockAudio() {
+  async function getAudioContext() {
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+
+    if (!AudioContextClass) return null;
+
+    if (
+      !audioContextRef.current ||
+      audioContextRef.current.state === "closed"
+    ) {
+      audioContextRef.current = new AudioContextClass();
+    }
+
+    if (audioContextRef.current.state === "suspended") {
+      await audioContextRef.current.resume();
+    }
+
+    return audioContextRef.current;
+  }
+
+  function startKeepAlive(audioContext: AudioContext) {
+    if (keepAliveRef.current) return;
+
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.value = 20;
+
+    gainNode.gain.value = 0.00001;
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.start();
+
+    keepAliveRef.current = {
+      oscillator,
+      gainNode,
+    };
+  }
+
+  function stopKeepAlive() {
+    if (!keepAliveRef.current) return;
+
     try {
-      const AudioContextClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext;
+      keepAliveRef.current.oscillator.stop();
+    } catch {}
 
-      if (!AudioContextClass) return;
+    try {
+      keepAliveRef.current.oscillator.disconnect();
+      keepAliveRef.current.gainNode.disconnect();
+    } catch {}
 
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContextClass();
-      }
+    keepAliveRef.current = null;
+  }
 
-      if (audioContextRef.current.state === "suspended") {
-        await audioContextRef.current.resume();
-      }
+  function cancelScheduledAlarm() {
+    if (alarmCleanupTimeoutRef.current) {
+      clearTimeout(alarmCleanupTimeoutRef.current);
+      alarmCleanupTimeoutRef.current = null;
+    }
 
-      const audioContext = audioContextRef.current;
+    alarmOscillatorsRef.current.forEach((oscillator) => {
+      try {
+        oscillator.stop();
+      } catch {}
+      try {
+        oscillator.disconnect();
+      } catch {}
+    });
 
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
+    alarmOscillatorsRef.current = [];
 
-      gainNode.gain.value = 0.0001;
+    if (alarmMasterGainRef.current) {
+      try {
+        alarmMasterGainRef.current.disconnect();
+      } catch {}
 
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + 0.03);
-    } catch (error) {
-      console.log("Não foi possível preparar o áudio:", error);
+      alarmMasterGainRef.current = null;
     }
   }
 
-  async function playBeep() {
-    try {
-      if (!audioContextRef.current) {
-        await unlockAudio();
-      }
+  async function scheduleAlarmSound(secondsFromNow: number) {
+    cancelScheduledAlarm();
 
-      const audioContext = audioContextRef.current;
+    const audioContext = await getAudioContext();
 
-      if (!audioContext) return;
+    if (!audioContext) return;
 
-      if (audioContext.state === "suspended") {
-        await audioContext.resume();
-      }
+    startKeepAlive(audioContext);
 
-      const masterGain = audioContext.createGain();
-      masterGain.gain.value = 1.8;
-      masterGain.connect(audioContext.destination);
+    const masterGain = audioContext.createGain();
+    masterGain.gain.value = 1.8;
+    masterGain.connect(audioContext.destination);
 
-      const notes = [
-        { frequency: 900, start: 0, duration: 0.35 },
-        { frequency: 1200, start: 0.4, duration: 0.35 },
-        { frequency: 900, start: 0.8, duration: 0.35 },
-        { frequency: 1200, start: 1.2, duration: 0.35 },
-        { frequency: 900, start: 1.6, duration: 0.45 },
-        { frequency: 1200, start: 2.1, duration: 0.7 },
-      ];
+    alarmMasterGainRef.current = masterGain;
 
-      notes.forEach((note) => {
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
+    const alarmStartTime = audioContext.currentTime + Math.max(0.1, secondsFromNow);
 
-        oscillator.type = "square";
-        oscillator.frequency.value = note.frequency;
+    const notes = [
+      { frequency: 900, start: 0, duration: 0.35 },
+      { frequency: 1200, start: 0.4, duration: 0.35 },
+      { frequency: 900, start: 0.8, duration: 0.35 },
+      { frequency: 1200, start: 1.2, duration: 0.35 },
+      { frequency: 900, start: 1.6, duration: 0.45 },
+      { frequency: 1200, start: 2.1, duration: 0.7 },
+    ];
 
-        oscillator.connect(gainNode);
-        gainNode.connect(masterGain);
+    notes.forEach((note) => {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
 
-        const startTime = audioContext.currentTime + 0.05 + note.start;
-        const endTime = startTime + note.duration;
+      oscillator.type = "square";
+      oscillator.frequency.value = note.frequency;
 
-        gainNode.gain.setValueAtTime(0, startTime);
-        gainNode.gain.linearRampToValueAtTime(1.3, startTime + 0.02);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, endTime);
+      oscillator.connect(gainNode);
+      gainNode.connect(masterGain);
 
-        oscillator.start(startTime);
-        oscillator.stop(endTime);
-      });
+      const startTime = alarmStartTime + note.start;
+      const endTime = startTime + note.duration;
 
-      setTimeout(() => {
-        masterGain.disconnect();
-      }, 4000);
-    } catch (error) {
-      console.log("Erro ao tocar o som:", error);
-    }
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(1.3, startTime + 0.02);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, endTime);
+
+      oscillator.start(startTime);
+      oscillator.stop(endTime);
+
+      alarmOscillatorsRef.current.push(oscillator);
+    });
+
+    alarmCleanupTimeoutRef.current = setTimeout(() => {
+      cancelScheduledAlarm();
+      stopKeepAlive();
+      void releaseWakeLock();
+    }, (secondsFromNow + 4) * 1000);
   }
 
   async function requestWakeLock() {
@@ -214,9 +278,17 @@ export default function TimerPage() {
     setInitialSeconds(seconds);
   }
 
+  function getSecondsLeft() {
+    if (!deadlineRef.current) return remainingSeconds;
+
+    return Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000));
+  }
+
   async function startTimer() {
+    let seconds: number;
+
     if (!hasStarted) {
-      const seconds = digitsToSeconds(timeDigits);
+      seconds = digitsToSeconds(timeDigits);
 
       if (seconds <= 0) {
         alert("Defina um tempo maior que 00:00 antes de iniciar.");
@@ -225,9 +297,18 @@ export default function TimerPage() {
 
       setRemainingSeconds(seconds);
       setInitialSeconds(seconds);
+    } else {
+      seconds = getSecondsLeft();
+
+      if (seconds <= 0) {
+        seconds = remainingSeconds;
+      }
     }
 
-    await unlockAudio();
+    deadlineRef.current = Date.now() + seconds * 1000;
+
+    await getAudioContext();
+    await scheduleAlarmSound(seconds);
     await requestWakeLock();
 
     setHasStarted(true);
@@ -235,11 +316,25 @@ export default function TimerPage() {
   }
 
   async function pauseTimer() {
+    const secondsLeft = getSecondsLeft();
+
+    cancelScheduledAlarm();
+    stopKeepAlive();
+
+    deadlineRef.current = null;
+
+    setRemainingSeconds(secondsLeft);
     setIsRunning(false);
+
     await releaseWakeLock();
   }
 
   async function resetTimer() {
+    cancelScheduledAlarm();
+    stopKeepAlive();
+
+    deadlineRef.current = null;
+
     setIsRunning(false);
     setHasStarted(false);
     setTimeDigits("0000");
@@ -257,34 +352,33 @@ export default function TimerPage() {
     if (!isRunning) return;
 
     const interval = setInterval(() => {
-      setRemainingSeconds((currentSeconds) => {
-        if (currentSeconds <= 1) {
-          return 0;
-        }
+      const secondsLeft = getSecondsLeft();
 
-        return currentSeconds - 1;
-      });
-    }, 1000);
+      setRemainingSeconds(secondsLeft);
+
+      if (secondsLeft <= 0) {
+        deadlineRef.current = null;
+
+        setIsRunning(false);
+        setHasStarted(false);
+        setTimeDigits("0000");
+        setInitialSeconds(0);
+      }
+    }, 250);
 
     return () => clearInterval(interval);
   }, [isRunning]);
 
   useEffect(() => {
-    if (!hasStarted || !isRunning || remainingSeconds > 0) return;
-
-    setIsRunning(false);
-    setHasStarted(false);
-    setTimeDigits("0000");
-    setInitialSeconds(0);
-
-    void releaseWakeLock();
-    void playBeep();
-  }, [remainingSeconds, hasStarted, isRunning]);
-
-  useEffect(() => {
     async function handleVisibilityChange() {
       if (document.visibilityState === "visible" && isRunning) {
         await requestWakeLock();
+
+        const audioContext = await getAudioContext();
+
+        if (audioContext) {
+          startKeepAlive(audioContext);
+        }
       }
     }
 
@@ -297,6 +391,8 @@ export default function TimerPage() {
 
   useEffect(() => {
     return () => {
+      cancelScheduledAlarm();
+      stopKeepAlive();
       void releaseWakeLock();
 
       if (audioContextRef.current) {
