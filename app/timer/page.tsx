@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+
+type WakeLockSentinelType = {
+  release: () => Promise<void>;
+};
 
 function formatSeconds(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -47,7 +51,7 @@ function playBeep() {
   const audioContext = new AudioContext();
 
   const masterGain = audioContext.createGain();
-  masterGain.gain.value = 30;
+  masterGain.gain.value = 1.5;
   masterGain.connect(audioContext.destination);
 
   const notes = [
@@ -73,7 +77,7 @@ function playBeep() {
     const endTime = startTime + note.duration;
 
     gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(0.9, startTime + 0.02);
+    gainNode.gain.linearRampToValueAtTime(1.2, startTime + 0.02);
     gainNode.gain.exponentialRampToValueAtTime(0.001, endTime);
 
     oscillator.start(startTime);
@@ -87,6 +91,8 @@ function playBeep() {
 
 export default function TimerPage() {
   const router = useRouter();
+
+  const wakeLockRef = useRef<WakeLockSentinelType | null>(null);
 
   const [checkingUser, setCheckingUser] = useState(true);
 
@@ -106,6 +112,35 @@ export default function TimerPage() {
 
     return Math.max(0, Math.min(100, (remainingSeconds / initialSeconds) * 100));
   }, [remainingSeconds, initialSeconds]);
+
+  async function requestWakeLock() {
+    try {
+      if ("wakeLock" in navigator && !wakeLockRef.current) {
+        const wakeLock = await (
+          navigator as Navigator & {
+            wakeLock: {
+              request: (type: "screen") => Promise<WakeLockSentinelType>;
+            };
+          }
+        ).wakeLock.request("screen");
+
+        wakeLockRef.current = wakeLock;
+      }
+    } catch (error) {
+      console.log("Wake Lock não disponível:", error);
+    }
+  }
+
+  async function releaseWakeLock() {
+    try {
+      if (wakeLockRef.current) {
+        await wakeLockRef.current.release();
+        wakeLockRef.current = null;
+      }
+    } catch (error) {
+      console.log("Erro ao liberar Wake Lock:", error);
+    }
+  }
 
   async function checkUser() {
     const { data, error } = await supabase.auth.getUser();
@@ -130,7 +165,7 @@ export default function TimerPage() {
     setInitialSeconds(seconds);
   }
 
-  function startTimer() {
+  async function startTimer() {
     if (!hasStarted) {
       const seconds = digitsToSeconds(timeDigits);
 
@@ -143,20 +178,25 @@ export default function TimerPage() {
       setInitialSeconds(seconds);
     }
 
+    await requestWakeLock();
+
     setHasStarted(true);
     setIsRunning(true);
   }
 
-  function pauseTimer() {
+  async function pauseTimer() {
     setIsRunning(false);
+    await releaseWakeLock();
   }
 
-  function resetTimer() {
+  async function resetTimer() {
     setIsRunning(false);
     setHasStarted(false);
     setTimeDigits("0000");
     setRemainingSeconds(0);
     setInitialSeconds(0);
+
+    await releaseWakeLock();
   }
 
   useEffect(() => {
@@ -176,6 +216,7 @@ export default function TimerPage() {
           setTimeDigits("0000");
           setInitialSeconds(0);
 
+          releaseWakeLock();
           playBeep();
 
           return 0;
@@ -187,6 +228,26 @@ export default function TimerPage() {
 
     return () => clearInterval(interval);
   }, [isRunning]);
+
+  useEffect(() => {
+    async function handleVisibilityChange() {
+      if (document.visibilityState === "visible" && isRunning) {
+        await requestWakeLock();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [isRunning]);
+
+  useEffect(() => {
+    return () => {
+      releaseWakeLock();
+    };
+  }, []);
 
   if (checkingUser) {
     return (
@@ -203,24 +264,15 @@ export default function TimerPage() {
           Baba<span className="text-green-600">Concept</span>
         </Link>
 
-        
-      </header>
-
-    <section className="px-5 py-6">
-
         <Link
           href="/ranking"
-          className="inline-block rounded-xl bg-zinc-100 px-4 py-2 text-sm font-bold"
+          className="rounded-xl bg-zinc-100 px-4 py-3 text-sm font-bold"
         >
-          ← Voltar
+          Ranking
         </Link>
-    </section>
-      
+      </header>
 
       <section className="flex min-h-[calc(100vh-73px)] flex-col items-center px-6 py-10">
-
-        
-
         <div className="relative flex h-52 w-52 items-center justify-center rounded-full border-4 border-zinc-900">
           <div
             className="absolute inset-[-4px] rounded-full border-4 border-green-500 transition-all"
