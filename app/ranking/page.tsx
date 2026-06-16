@@ -218,7 +218,16 @@ const currentRankAppearance = getRankAppearance(currentPlayerRank);
             <nav className="mt-8 space-y-3">
           
 
-              
+                
+
+
+              <Link
+              href="/timer"
+              onClick={() => setMenuOpen(false)}
+              className="block rounded-xl px-4 py-3 font-bold text-zinc-700"
+            >
+              Timer
+            </Link>
               <Link
               href="/profile"
               onClick={() => setMenuOpen(false)}
